@@ -1,3 +1,5 @@
 build
-*.xpi
 *lock*
+
+*.xpi
+*.json

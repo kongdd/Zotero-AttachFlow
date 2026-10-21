@@ -6,13 +6,21 @@ const { test } = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../build/functions.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(__dirname, '../build/src/bootstrap.js'), 'utf8');
 
+test('Zotero 10 manifest 必填项', () => {
+  const manifest = require('../manifest.json');
+  for (const key of ['id', 'update_url', 'strict_min_version', 'strict_max_version']) {
+    assert.ok(manifest.applications.zotero[key], `Missing ${key}`);
+  }
+  assert.equal(manifest.version, require('../package.json').version);
+});
+
 function fixture(isWin) {
   const paths = isWin ? path.win32 : path.posix;
   const base = isWin ? 'C:\\文献 库' : '/Users/test/文献 库';
   const oldPath = paths.join(base, 'storage', 'old.pdf');
   const target = paths.join(base, '父分类', '子分类', 'Paper.pdf');
   const files = new Map([[oldPath, 'PDF']]);
-  const calls = { opened: [], saved: [], errors: [], listeners: new Map() };
+  const calls = { opened: [], viewed: [], saved: [], errors: [], listeners: new Map() };
   const window = {
     addEventListener: (name, fn) => calls.listeners.set(name, fn),
     removeEventListener: name => calls.listeners.delete(name),
@@ -32,6 +40,11 @@ function fixture(isWin) {
   };
   const other = { ...pdf, id: 3, attachmentContentType: 'text/plain' };
   const records = new Map([[1, parent], [2, pdf], [3, other]]);
+  const pane = {
+    getSelectedItems: () => [parent],
+    async viewAttachment(id) { calls.viewed.push({ id, path: await records.get(id).getFilePathAsync() }); },
+  };
+  window.ZoteroPane = pane;
   const move = async (from, to, options = {}) => {
     if (options.noOverwrite && files.has(to)) throw new Error('Target exists');
     files.set(to, files.get(from));
@@ -55,12 +68,12 @@ function fixture(isWin) {
     launchFile: async dir => calls.opened.push(dir),
     logError: error => calls.errors.push(error),
     Server: { Endpoints: {} }, getMainWindows: () => [window],
-    getActiveZoteroPane: () => ({ getSelectedItems: () => [parent] }),
+    getActiveZoteroPane: () => pane,
     alert: () => {},
   };
   const scope = { Zotero, PathUtils: { join: paths.join, parent: paths.dirname, filename: paths.basename },
     IOUtils: { makeDirectory: async () => {}, move }, Error };
-  const api = vm.runInNewContext(source + '\n({opendir, open_rename, shortcutCommand})', scope);
+  const api = vm.runInNewContext(source + '\n({opendir, rename, open_rename, shortcutCommand})', scope);
   return { ...api, scope, paths, base, pdf, parent, other, files, calls, oldPath, target, window, Zotero };
 }
 
@@ -84,8 +97,9 @@ for (const isWin of [true, false]) {
     assert.equal(await f.opendir([f.other, f.pdf]), null);
     assert.equal(f.calls.opened.length, 0);
   });
-  check('open_rename 移动 PDF 并保存链接和标题', async f => {
-    const result = await f.open_rename([f.parent]);
+  check('rename 只移动 PDF 并保存链接，不打开文件', async f => {
+    const result = await f.rename([f.parent]);
+    assert.equal(f.calls.viewed.length, 0);
     assert.equal(result.renamed, 1);
     assert.equal(f.pdf.attachmentPath, f.target);
     assert.equal(f.pdf.title, 'Paper');
@@ -95,21 +109,21 @@ for (const isWin of [true, false]) {
     assert.deepEqual(f.calls.saved, [2]);
   });
   check('父子重复选择只处理一次', async f => {
-    assert.equal((await f.open_rename([f.parent, f.pdf])).renamed, 1);
+    assert.equal((await f.rename([f.parent, f.pdf])).renamed, 1);
     assert.deepEqual(f.calls.saved, [2]);
   });
   check('重名保护和重复执行', async f => {
     f.files.set(f.target, 'Existing PDF');
-    assert.equal((await f.open_rename([f.pdf])).renamed, 1);
+    assert.equal((await f.rename([f.pdf])).renamed, 1);
     const actual = f.pdf.attachmentPath;
     assert.notEqual(actual, f.target);
     assert.equal(f.files.get(f.target), 'Existing PDF');
-    assert.equal((await f.open_rename([f.pdf])).skipped, 1);
+    assert.equal((await f.rename([f.pdf])).skipped, 1);
     assert.equal(f.pdf.attachmentPath, actual);
   });
   check('保存失败时恢复原文件和元数据', async f => {
     f.pdf.saveTx = async () => { throw new Error('Database failure'); };
-    assert.equal((await f.open_rename([f.pdf])).errors.length, 1);
+    assert.equal((await f.rename([f.pdf])).errors.length, 1);
     assert.equal(f.files.get(f.oldPath), 'PDF');
     assert.equal(f.files.has(f.target), false);
     assert.equal(f.pdf.attachmentPath, f.oldPath);
@@ -118,21 +132,32 @@ for (const isWin of [true, false]) {
   });
   check('独立附件、缺失文件和空选择安全跳过', async f => {
     f.pdf.parentItemID = null;
-    assert.equal((await f.open_rename([f.pdf])).skipped, 1);
+    assert.equal((await f.rename([f.pdf])).skipped, 1);
     f.files.clear();
-    assert.equal((await f.open_rename([f.pdf])).skipped, 1);
-    assert.equal((await f.open_rename([])).renamed, 0);
+    assert.equal((await f.rename([f.pdf])).skipped, 1);
+    assert.equal((await f.rename([])).renamed, 0);
   });
   check('快捷键仅接受 Windows Ctrl / macOS Cmd', f => {
     assert.equal(f.shortcutCommand(key('e', isWin), !isWin), 'opendir');
-    assert.equal(f.shortcutCommand(key('r', isWin), !isWin), 'open_rename');
+    assert.equal(f.shortcutCommand(key('r', isWin), !isWin), 'rename');
     assert.equal(f.shortcutCommand(key('e', !isWin), !isWin), null);
     for (const change of [{ shiftKey: true }, { altKey: true }, { repeat: true }, { defaultPrevented: true }]) {
       assert.equal(f.shortcutCommand(key('r', isWin, change), !isWin), null);
     }
     assert.equal(f.shortcutCommand(key('r', isWin, { composedPath: () => [{ closest: () => ({}) }] }), !isWin), null);
   });
+  check('open_rename 在正常打开时先重命名，卸载后恢复原打开方法', async f => {
+    const pane = f.window.ZoteroPane;
+    const original = pane.viewAttachment;
+    const restore = f.open_rename(pane);
+    await pane.viewAttachment(f.pdf.id);
+    assert.deepEqual(f.calls.saved, [2]);
+    assert.deepEqual(f.calls.viewed, [{ id: 2, path: f.target }]);
+    restore();
+    assert.equal(pane.viewAttachment, original);
+  });
   check('插件启动、实际键处理函数及卸载清理', async f => {
+    const original = f.window.ZoteroPane.viewAttachment;
     const lifecycle = vm.runInNewContext(source + bootstrap + '\n({startup,shutdown})', f.scope);
     await lifecycle.startup({ version: 'test' });
     const plugin = f.Zotero.AttachmentTools;
@@ -149,6 +174,7 @@ for (const isWin of [true, false]) {
     assert.deepEqual(f.calls.opened, [f.paths.dirname(f.target)]);
     lifecycle.shutdown();
     assert.equal(f.calls.listeners.size, 0);
+    assert.equal(f.window.ZoteroPane.viewAttachment, original);
     assert.equal(f.Zotero.AttachmentTools, undefined);
     assert.equal(f.Zotero.Server.Endpoints['/attachment-tools/tests'], undefined);
   });

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { zipSync } = require('fflate');
 const root = path.resolve(__dirname, '..');
-const files = ['src/opendir', 'src/open_rename', 'src/shortcuts', 'tests/runtime', 'tests/integration'];
+const files = ['src/opendir', 'src/rename', 'src/open_rename', 'src/shortcuts', 'tests/runtime', 'tests/integration'];
 const bundle = names => names.map(name => fs.readFileSync(path.join(root, 'build', name + '.js'), 'utf8')).join('\n');
 fs.writeFileSync(path.join(root, 'build/functions.js'), bundle(files));
 if (process.argv.includes('--functions')) process.exit(0);

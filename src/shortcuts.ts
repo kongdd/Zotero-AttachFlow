@@ -1,4 +1,4 @@
-type AttachmentCommand = 'opendir' | 'open_rename';
+type AttachmentCommand = 'opendir' | 'rename';
 
 // 参考 Actions & Tags 的输入框排除规则；不依赖其键盘工具包。
 function shortcutCommand(event: KeyboardEvent, isMac: boolean): AttachmentCommand | null {
@@ -9,6 +9,6 @@ function shortcutCommand(event: KeyboardEvent, isMac: boolean): AttachmentComman
     return null;
   }
   if (event.key.toLowerCase() === 'e') return 'opendir';
-  if (event.key.toLowerCase() === 'r') return 'open_rename';
+  if (event.key.toLowerCase() === 'r') return 'rename';
   return null;
 }

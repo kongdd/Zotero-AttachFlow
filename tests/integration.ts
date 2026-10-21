@@ -9,6 +9,14 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
   const options = { skipNotifier: true };
   const report: TestReport = { ...runRuntimeTests(core), checks: [], passed: false };
   const pdf = testPDF();
+  const window = Zotero.getMainWindow();
+  const pane = window.ZoteroPane;
+  const selected = pane.itemsView ? pane.itemsView.getSelectedItems(true) : [];
+  const selectedTab = window.Zotero_Tabs.selectedID;
+  const tree = pane.collectionsView;
+  const selectedCollection = tree ? tree.selectedTreeRow?.id : undefined;
+  const plugin = core as Partial<AttachmentPlugin>;
+  let restoreOpen: (() => void) | undefined;
 
   function assert(value: unknown, message: string): asserts value {
     if (!value) throw new Error(message);
@@ -82,7 +90,7 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
 
     await check('附件入口、嵌套目录及数据库保存', async () => {
       const f = await fixture('attachment', child.id);
-      assert((await core.open_rename([f.attachment])).renamed === 1, 'Expected one rename');
+      assert((await core.rename([f.attachment])).renamed === 1, 'Expected one rename');
       await verify(f);
     });
     await check('父条目入口、父子重复选择及非 PDF 跳过', async () => {
@@ -96,19 +104,19 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
       text.attachmentPath = textPath;
       await text.saveTx(options);
       items.push(text);
-      assert((await core.open_rename([f.parent, f.attachment])).renamed === 1, 'Attachment processed twice');
+      assert((await core.rename([f.parent, f.attachment])).renamed === 1, 'Attachment processed twice');
       await verify(f);
       assert(await text.getFilePathAsync() === textPath, 'Non-PDF attachment was moved');
       assert(await Zotero.File.getContentsAsync(textPath) === 'Keep this text.', 'Non-PDF changed');
     });
     await check('多选入口', async () => {
       const fixtures = [await fixture('multi-1', child.id), await fixture('multi-2', child.id)];
-      assert((await core.open_rename(fixtures.map(f => f.parent))).renamed === 2, 'Expected two renames');
+      assert((await core.rename(fixtures.map(f => f.parent))).renamed === 2, 'Expected two renames');
       for (const f of fixtures) await verify(f);
     });
     await check('stored 转 linked file', async () => {
       const f = await fixture('stored', child.id, true);
-      assert((await core.open_rename([f.attachment])).renamed === 1, 'Stored attachment was not renamed');
+      assert((await core.rename([f.attachment])).renamed === 1, 'Stored attachment was not renamed');
       await verify(f);
     });
     await check('重名保护及重复执行不变', async () => {
@@ -116,12 +124,40 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
       const name = Zotero.Attachments.getFileBaseNameFromItem(f.parent, { attachmentTitle: f.parent.getField('title') });
       const occupied = PathUtils.join(target, child.name, name + '.pdf');
       await Zotero.File.putContentsAsync(occupied, 'Do not overwrite.');
-      assert((await core.open_rename([f.attachment])).renamed === 1, 'Expected a unique filename');
+      assert((await core.rename([f.attachment])).renamed === 1, 'Expected a unique filename');
       const moved = await verify(f);
       assert(moved !== occupied, 'Link points to the existing file');
       assert(await Zotero.File.getContentsAsync(occupied) === 'Do not overwrite.', 'Existing file changed');
-      assert((await core.open_rename([f.attachment])).renamed === 0, 'Repeated action renamed the file again');
+      assert((await core.rename([f.attachment])).renamed === 0, 'Repeated action renamed the file again');
       assert(await f.attachment.getFilePathAsync() === moved, 'Repeated action changed the path');
+    });
+    await check('正常打开 PDF：自动重命名后交回 Zotero 打开', async () => {
+      const f = await fixture('auto-open', child.id);
+      if (!plugin.windows?.has(window)) restoreOpen = open_rename(pane);
+      await pane.viewAttachment(f.attachment.id);
+      await verify(f);
+    });
+    if (plugin.windows?.has(window)) await check('主窗口快捷键 DOM 事件：Ctrl/Cmd+R、Ctrl/Cmd+E', async () => {
+      const f = await fixture('shortcut', child.id);
+      assert(pane.collectionsView && pane.itemsView, 'Library view is not ready');
+      await pane.collectionsView.selectByID('L' + Zotero.Libraries.userLibraryID);
+      await pane.itemsView.refresh();
+      await pane.selectItem(f.attachment.id);
+      const actual = pane.getSelectedItems(true);
+      assert(actual.length === 1 && actual[0] === f.attachment.id, 'Test attachment was not selected');
+      async function press(key: string) {
+        const event = new window.KeyboardEvent('keydown', {
+          key, ctrlKey: !Zotero.isMac, metaKey: Zotero.isMac, bubbles: true, cancelable: true,
+        });
+        plugin.pending = null;
+        window.dispatchEvent(event);
+        assert(event.defaultPrevented && plugin.pending,
+          `Shortcut ${key} was not handled: trusted=${event.isTrusted}, prevented=${event.defaultPrevented}, busy=${plugin.busy}`);
+        return await plugin.pending;
+      }
+      await press('r');
+      const moved = await verify(f);
+      assert(await press('e') === PathUtils.parent(moved), 'Shortcut opened the wrong directory');
     });
     await check('opendir 调用系统文件管理器', async () => {
       const f = await fixture('opendir', child.id);
@@ -134,6 +170,13 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
     const ids = items.map(item => item.id);
     const collectionIDs = collections.map(item => item.id);
     const errors: string[] = [];
+    restoreOpen?.();
+    try {
+      for (const tab of window.Zotero_Tabs.getState()) {
+        const reader = Zotero.Reader.getByTabID(tab.id);
+        if (reader && reader.itemID !== undefined && ids.includes(reader.itemID)) reader.close();
+      }
+    } catch (error) { errors.push(String(error)); }
     for (const item of [...items.reverse(), ...collections.reverse()]) {
       try { await item.eraseTx(options); } catch (error) { errors.push(String(error)); }
     }
@@ -141,6 +184,12 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
       try { await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true }); }
       catch (error) { errors.push(String(error)); }
     }
+    try {
+      if (pane.itemsView) await pane.itemsView.refresh();
+      if (selectedCollection && pane.collectionsView) await pane.collectionsView.selectByID(selectedCollection);
+      if (selected.length) await pane.selectItems(selected);
+      if (window.Zotero_Tabs.getState().some(tab => tab.id === selectedTab)) window.Zotero_Tabs.select(selectedTab);
+    } catch (error) { errors.push(String(error)); }
     await check('清理测试条目、分类及文件', async () => {
       assert(!errors.length, errors.join('\n'));
       for (const [table, column, values] of [['items', 'itemID', ids], ['collections', 'collectionID', collectionIDs]] as const) {

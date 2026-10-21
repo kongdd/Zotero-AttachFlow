@@ -3,6 +3,7 @@
   "files": [
     "src/zotero.d.ts",
     "src/opendir.ts",
+    "src/rename.ts",
     "src/open_rename.ts",
     "src/shortcuts.ts",
     "tests/runtime.ts",

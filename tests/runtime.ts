@@ -1,7 +1,7 @@
 interface AttachmentCommands {
   version: string;
   opendir: typeof opendir;
-  open_rename: typeof open_rename;
+  rename: typeof rename;
 }
 interface TestCheck {
   name: string;
@@ -20,7 +20,7 @@ function runRuntimeTests(commands: AttachmentCommands): TestReport {
   const checks: [string, boolean][] = [
     ['真实 Zotero 对象', Zotero === Zotero.getMainWindow().Zotero],
     ['opendir 函数', typeof commands.opendir === 'function'],
-    ['open_rename 函数', typeof commands.open_rename === 'function'],
+    ['rename 函数', typeof commands.rename === 'function'],
     ['Zotero.launchFile', typeof Zotero.launchFile === 'function'],
     ['Zotero.File.moveToUnique', typeof Zotero.File.moveToUnique === 'function'],
     ['Zotero.Item.saveTx', typeof Zotero.Item.prototype.saveTx === 'function'],

@@ -1,5 +1,5 @@
 interface AttachmentPlugin extends AttachmentCommands {
-  windows: Map<Window, (event: KeyboardEvent) => void>;
+  windows: Map<Window, () => void>;
   pending: Promise<string | null | RenameResult> | null;
   busy: boolean;
 }
@@ -15,7 +15,7 @@ async function startup({ version }: { version: string }): Promise<void> {
   const plugin: AttachmentPlugin = {
     version,
     opendir,
-    open_rename,
+    rename,
     windows: new Map(),
     pending: null,
     busy: false,
@@ -29,6 +29,7 @@ async function startup({ version }: { version: string }): Promise<void> {
 function onMainWindowLoad({ window }: { window: Window }): void {
   const plugin = attachmentPlugin;
   if (!plugin || plugin.windows.has(window)) return;
+  const restoreOpen = open_rename((window as _ZoteroTypes.MainWindow).ZoteroPane);
   const handler = (event: KeyboardEvent): void => {
     const command = shortcutCommand(event, Zotero.isMac);
     if (!command) return;
@@ -36,9 +37,9 @@ function onMainWindowLoad({ window }: { window: Window }): void {
     if (!items.length) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (plugin.busy || testsRunning) return;
+    if (plugin.busy) return;
     plugin.busy = true;
-    plugin.pending = (command === 'opendir' ? plugin.opendir(items) : plugin.open_rename(items))
+    plugin.pending = plugin[command](items)
       .then(result => {
         if (result && typeof result === 'object' && result.errors.length) {
           Zotero.alert(window, 'Attachment Tools', result.errors.map(error => error.message).join('\n'));
@@ -53,12 +54,14 @@ function onMainWindowLoad({ window }: { window: Window }): void {
       .finally(() => { plugin.busy = false; });
   };
   window.addEventListener('keydown', handler, true);
-  plugin.windows.set(window, handler);
+  plugin.windows.set(window, () => {
+    window.removeEventListener('keydown', handler, true);
+    restoreOpen();
+  });
 }
 
 function onMainWindowUnload({ window }: { window: Window }): void {
-  const handler = attachmentPlugin?.windows.get(window);
-  if (handler) window.removeEventListener('keydown', handler, true);
+  attachmentPlugin?.windows.get(window)?.();
   attachmentPlugin?.windows.delete(window);
 }
 
