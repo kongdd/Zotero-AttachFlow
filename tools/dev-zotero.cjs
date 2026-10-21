@@ -6,7 +6,8 @@ const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const mode = process.argv[2] || 'test';
 if (!['test', 'install'].includes(mode)) throw new Error('Expected test or install.');
-const xpi = path.join(root, 'dist', `attachment-tools-${require('../package.json').version}.xpi`);
+const manifest = require('../manifest.json');
+const xpi = path.join(root, 'dist', `${manifest.name}-${manifest.version}.xpi`);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'attachment-tools-test-'));
 const reportPath = path.join(dir, 'report.json');
 const code = `
@@ -15,12 +16,12 @@ const code = `
     if (${JSON.stringify(mode)} === 'install') {
       const { AddonManager } = window.ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
       const file = Zotero.getTempDirectory();
-      file.append('attachment-tools-' + Date.now() + '.xpi');
+      file.append('Zotero-AttachFlow-' + Date.now() + '.xpi');
       await window.IOUtils.copy(${JSON.stringify(xpi)}, file.path);
       const installation = await AddonManager.getInstallForFile(file);
       if (installation.error) {
         const messages = window.Services.console.getMessageArray()
-          .map(message => message.message).filter(message => /Invalid XPI|attachment-tools|manifest/i.test(message)).slice(-6);
+          .map(message => message.message).filter(message => /Invalid XPI|attachment-tools|AttachFlow|manifest/i.test(message)).slice(-6);
         throw new Error(JSON.stringify({ code: installation.error, state: installation.state, messages }));
       }
       await installation.install();

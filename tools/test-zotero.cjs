@@ -19,6 +19,6 @@ async function main() {
 }
 main().catch(error => {
   console.error(String(error));
-  console.error('Start Zotero with Attachment Tools installed; keep its local HTTP server enabled.');
+  console.error('Start Zotero with Zotero-AttachFlow installed; keep its local HTTP server enabled.');
   process.exitCode = 1;
 });

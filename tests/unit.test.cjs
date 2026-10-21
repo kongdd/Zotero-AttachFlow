@@ -13,6 +13,8 @@ test('Zotero 10 manifest 必填项', () => {
     assert.ok(manifest.applications.zotero[key], `Missing ${key}`);
   }
   assert.equal(manifest.version, require('../package.json').version);
+  assert.equal(manifest.name, 'Zotero-AttachFlow');
+  assert.equal(manifest.applications.zotero.id, 'attachment-tools@kongdd');
 });
 
 function fixture(isWin) {

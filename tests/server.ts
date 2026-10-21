@@ -14,8 +14,8 @@ class AttachmentTestEndpoint {
     if (!plugin || plugin.pending || testsRunning) return [409, 'text/plain', 'Plugin is busy'];
     const window = Zotero.getMainWindow();
     const message = mode === 'integration'
-      ? '运行 Attachment Tools 集成测试？将创建临时条目和 PDF、移动文件、调用文件管理器，完成后清理。不会处理现有附件。'
-      : '运行 Attachment Tools 只读环境检查？';
+      ? '运行 Zotero-AttachFlow 集成测试？将创建临时条目和 PDF、移动文件、调用文件管理器，完成后清理。不会处理现有附件。'
+      : '运行 Zotero-AttachFlow 只读环境检查？';
     if (!window?.confirm(message)) return [403, 'text/plain', 'Cancelled'];
     testsRunning = true;
     try {

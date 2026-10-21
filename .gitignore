@@ -1,5 +1,4 @@
-build
-*lock*
-
+node_modules/
+build/
+dist/
 *.xpi
-*.json

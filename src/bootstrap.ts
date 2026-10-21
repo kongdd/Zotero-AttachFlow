@@ -38,13 +38,13 @@ function onMainWindowLoad({ window }: { window: Window }): void {
     plugin.pending = plugin[command](items)
       .then(result => {
         if (result && typeof result === 'object' && result.errors.length) {
-          Zotero.alert(window, 'Attachment Tools', result.errors.map(error => error.message).join('\n'));
+          Zotero.alert(window, 'Zotero-AttachFlow', result.errors.map(error => error.message).join('\n'));
         }
         return result;
       })
       .catch(error => {
         Zotero.logError(error instanceof Error ? error : new Error(String(error)));
-        Zotero.alert(window, 'Attachment Tools', String(error));
+        Zotero.alert(window, 'Zotero-AttachFlow', String(error));
         return null;
       })
       .finally(() => { plugin.pending = null; });

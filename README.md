@@ -1,4 +1,4 @@
-# Attachment Tools
+# Zotero-AttachFlow
 
 手动重命名、打开目录、打开 PDF 前自动重命名，无 Actions & Tags 运行依赖；当前针对 Zotero 10。
 
@@ -22,7 +22,7 @@ npm test
 npm run build
 ```
 
-在 Zotero「工具 → 插件」中选择「从文件安装插件」，安装 `pkgs/attachment-tools/dist/attachment-tools-0.1.0.xpi`。
+在 Zotero「工具 → 插件」中选择「从文件安装插件」，安装 `dist/Zotero-AttachFlow-0.1.0.xpi`。
 
 ## 测试
 
@@ -34,6 +34,8 @@ npm run test:integration   # 安装后执行真实文件、数据库测试
 ```
 
 真实测试均需在 Zotero 弹窗确认。安装后通过本插件的本地 HTTP 端点运行，不依赖其他插件；默认端口 23119，可用 `ZOTERO_PORT` 指定。集成测试自动验证正常打开和快捷键 DOM 事件，仅创建随机命名的测试对象，结束后清理并恢复选择；文件管理器窗口需目视确认。Windows 目前只有单元测试覆盖。
+
+为兼容已有安装和开发工具，插件 ID、npm 包名、源码目录及内部接口保持不变。
 
 ## 代码
 
