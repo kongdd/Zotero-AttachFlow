@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "zotero-types"
+    ],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "rootDir": ".",
+    "outDir": "build"
+  },
+  "files": [
+    "src/zotero.d.ts",
+    "src/opendir.ts",
+    "src/open_rename.ts",
+    "src/shortcuts.ts",
+    "tests/runtime.ts",
+    "tests/integration.ts",
+    "src/bootstrap.ts"
+  ]
+}

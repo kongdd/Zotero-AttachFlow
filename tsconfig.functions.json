@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "files": [
+    "src/zotero.d.ts",
+    "src/opendir.ts",
+    "src/open_rename.ts",
+    "src/shortcuts.ts",
+    "tests/runtime.ts",
+    "tests/integration.ts"
+  ]
+}

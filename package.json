@@ -1,0 +1,21 @@
+{
+  "name": "@kongdd/zotero-attachment-tools",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc && node tools/build.cjs",
+    "test": "tsc && node tools/build.cjs --functions && node --test tests/unit.test.cjs",
+    "test:functions": "tsc -p tsconfig.functions.json && node tools/build.cjs --functions && node tools/test-functions.cjs",
+    "test:runtime": "node tools/test-zotero.cjs runtime",
+    "test:integration": "node tools/test-zotero.cjs integration"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.3",
+    "typescript": "^7.0.2",
+    "zotero-types": "^4.1.3"
+  }
+}
