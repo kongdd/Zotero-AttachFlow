@@ -10,6 +10,8 @@
 
 快捷键仅在 Zotero 主窗口有效，输入框中不触发。请停用 Actions & Tags 中同名快捷键，避免冲突。独立 PDF 没有父条目元数据，重命名时跳过。
 
+复制格式化参考文献请使用 Zotero 原生快捷键 `Cmd+Shift+C`（Windows：`Ctrl+Shift+C`），样式在「设置 → 导出 → 快速复制」中配置。
+
 ## 使用
 
 在仓库根目录执行：
@@ -39,5 +41,6 @@ npm run test:integration   # 安装后执行真实文件、数据库测试
 - `src/rename.ts`：手动重命名、移动及保存失败回滚。
 - `src/open_rename.ts`：接管正常附件打开流程，先调用 rename，再由 Zotero 打开。
 - `src/shortcuts.ts`：按键匹配、输入框排除。
-- `src/bootstrap.ts`：生命周期、快捷键注册、受确认保护的内置测试入口。
-- `tests/`：单元测试与真实集成测试；`tools/`：构建和测试命令。
+- `src/bootstrap.ts`：生命周期与快捷键注册，仅用 pending 防止重复执行。
+- `tests/`：单元测试、真实集成测试及受确认保护的测试服务（`server.ts`）。
+- `tools/`：构建和测试命令。

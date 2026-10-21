@@ -4,7 +4,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../build/functions.js'), 'utf8');
-const bootstrap = fs.readFileSync(path.join(__dirname, '../build/src/bootstrap.js'), 'utf8');
+const bootstrap = ['tests/server', 'src/bootstrap']
+  .map(name => fs.readFileSync(path.join(__dirname, '../build', name + '.js'), 'utf8')).join('\n');
 
 test('Zotero 10 manifest 必填项', () => {
   const manifest = require('../manifest.json');
@@ -20,7 +21,7 @@ function fixture(isWin) {
   const oldPath = paths.join(base, 'storage', 'old.pdf');
   const target = paths.join(base, '父分类', '子分类', 'Paper.pdf');
   const files = new Map([[oldPath, 'PDF']]);
-  const calls = { opened: [], viewed: [], saved: [], errors: [], listeners: new Map() };
+  const calls = { opened: [], viewed: [], saved: [], copied: [], errors: [], listeners: new Map() };
   const window = {
     addEventListener: (name, fn) => calls.listeners.set(name, fn),
     removeEventListener: name => calls.listeners.delete(name),
@@ -42,6 +43,7 @@ function fixture(isWin) {
   const records = new Map([[1, parent], [2, pdf], [3, other]]);
   const pane = {
     getSelectedItems: () => [parent],
+    copySelectedItemsToClipboard(asCitations) { calls.copied.push(asCitations); },
     async viewAttachment(id) { calls.viewed.push({ id, path: await records.get(id).getFilePathAsync() }); },
   };
   window.ZoteroPane = pane;
@@ -146,6 +148,20 @@ for (const isWin of [true, false]) {
     }
     assert.equal(f.shortcutCommand(key('r', isWin, { composedPath: () => [{ closest: () => ({}) }] }), !isWin), null);
   });
+  check('插件不拦截原生复制快捷键及已移除的测试快捷键', async f => {
+    const lifecycle = vm.runInNewContext(source + bootstrap + '\n({startup,shutdown})', f.scope);
+    await lifecycle.startup({ version: 'test' });
+    const handler = f.calls.listeners.get('keydown');
+    for (const letter of ['c', 'C', 'd', 'D']) {
+      const event = key(letter, isWin, { shiftKey: true });
+      assert.equal(f.shortcutCommand(event, !isWin), null);
+      handler(event);
+      assert.equal(event.defaultPrevented, false);
+      assert.equal(f.Zotero.AttachmentTools.pending, null);
+    }
+    assert.deepEqual(f.calls.copied, []);
+    lifecycle.shutdown();
+  });
   check('open_rename 在正常打开时先重命名，卸载后恢复原打开方法', async f => {
     const pane = f.window.ZoteroPane;
     const original = pane.viewAttachment;
@@ -156,7 +172,7 @@ for (const isWin of [true, false]) {
     restore();
     assert.equal(pane.viewAttachment, original);
   });
-  check('插件启动、实际键处理函数及卸载清理', async f => {
+  check('插件生命周期、快捷键互斥与失败后恢复', async f => {
     const original = f.window.ZoteroPane.viewAttachment;
     const lifecycle = vm.runInNewContext(source + bootstrap + '\n({startup,shutdown})', f.scope);
     await lifecycle.startup({ version: 'test' });
@@ -167,11 +183,26 @@ for (const isWin of [true, false]) {
     const rename = key('r', isWin);
     handler(rename);
     assert.equal(rename.defaultPrevented, true);
-    await plugin.pending;
+    const pending = plugin.pending;
+    handler(key('r', isWin));
+    assert.equal(plugin.pending, pending);
+    await pending;
+    assert.equal(plugin.pending, null);
+    assert.deepEqual(f.calls.saved, [2]);
     assert.equal(f.pdf.attachmentPath, f.target);
     handler(key('e', isWin));
     await plugin.pending;
     assert.deepEqual(f.calls.opened, [f.paths.dirname(f.target)]);
+    const opendir = plugin.opendir;
+    plugin.opendir = async () => { throw new Error('Launch failed'); };
+    handler(key('e', isWin));
+    assert.equal(await plugin.pending, null);
+    assert.equal(plugin.pending, null);
+    assert.equal(f.calls.errors.length, 1);
+    plugin.opendir = opendir;
+    handler(key('e', isWin));
+    await plugin.pending;
+    assert.equal(f.calls.opened.length, 2);
     lifecycle.shutdown();
     assert.equal(f.calls.listeners.size, 0);
     assert.equal(f.window.ZoteroPane.viewAttachment, original);

@@ -23,6 +23,7 @@
     "src/shortcuts.ts",
     "tests/runtime.ts",
     "tests/integration.ts",
+    "tests/server.ts",
     "src/bootstrap.ts"
   ]
 }

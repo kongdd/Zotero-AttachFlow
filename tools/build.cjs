@@ -11,7 +11,7 @@ const manifest = require('../manifest.json');
 if (manifest.version !== require('../package.json').version) throw new Error('Version mismatch.');
 const archive = zipSync({
   'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)),
-  'bootstrap.js': Buffer.from(bundle([...files, 'src/bootstrap'])),
+  'bootstrap.js': Buffer.from(bundle([...files, 'tests/server', 'src/bootstrap'])),
 });
 const dest = path.join(root, 'dist', `attachment-tools-${manifest.version}.xpi`);
 fs.mkdirSync(path.dirname(dest), { recursive: true });

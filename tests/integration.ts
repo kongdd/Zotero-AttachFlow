@@ -149,10 +149,9 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
         const event = new window.KeyboardEvent('keydown', {
           key, ctrlKey: !Zotero.isMac, metaKey: Zotero.isMac, bubbles: true, cancelable: true,
         });
-        plugin.pending = null;
         window.dispatchEvent(event);
         assert(event.defaultPrevented && plugin.pending,
-          `Shortcut ${key} was not handled: trusted=${event.isTrusted}, prevented=${event.defaultPrevented}, busy=${plugin.busy}`);
+          `Shortcut ${key} was not handled: trusted=${event.isTrusted}, prevented=${event.defaultPrevented}, pending=${!!plugin.pending}`);
         return await plugin.pending;
       }
       await press('r');

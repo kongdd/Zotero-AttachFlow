@@ -1,12 +1,9 @@
 interface AttachmentPlugin extends AttachmentCommands {
   windows: Map<Window, () => void>;
   pending: Promise<string | null | RenameResult> | null;
-  busy: boolean;
 }
 type ZoteroWithTools = typeof Zotero & { AttachmentTools?: AttachmentPlugin };
 let attachmentPlugin: AttachmentPlugin | undefined;
-let testsRunning = false;
-const testEndpoint = '/attachment-tools/tests';
 
 function install(): void {}
 function uninstall(): void {}
@@ -18,7 +15,6 @@ async function startup({ version }: { version: string }): Promise<void> {
     rename,
     windows: new Map(),
     pending: null,
-    busy: false,
   };
   attachmentPlugin = plugin;
   (Zotero as ZoteroWithTools).AttachmentTools = plugin;
@@ -29,16 +25,16 @@ async function startup({ version }: { version: string }): Promise<void> {
 function onMainWindowLoad({ window }: { window: Window }): void {
   const plugin = attachmentPlugin;
   if (!plugin || plugin.windows.has(window)) return;
-  const restoreOpen = open_rename((window as _ZoteroTypes.MainWindow).ZoteroPane);
+  const pane = (window as _ZoteroTypes.MainWindow).ZoteroPane;
+  const restoreOpen = open_rename(pane);
   const handler = (event: KeyboardEvent): void => {
     const command = shortcutCommand(event, Zotero.isMac);
     if (!command) return;
-    const items = Zotero.getActiveZoteroPane()?.getSelectedItems() || [];
+    const items = pane.getSelectedItems();
     if (!items.length) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (plugin.busy) return;
-    plugin.busy = true;
+    if (plugin.pending) return;
     plugin.pending = plugin[command](items)
       .then(result => {
         if (result && typeof result === 'object' && result.errors.length) {
@@ -51,7 +47,7 @@ function onMainWindowLoad({ window }: { window: Window }): void {
         Zotero.alert(window, 'Attachment Tools', String(error));
         return null;
       })
-      .finally(() => { plugin.busy = false; });
+      .finally(() => { plugin.pending = null; });
   };
   window.addEventListener('keydown', handler, true);
   plugin.windows.set(window, () => {
@@ -72,33 +68,4 @@ function shutdown(): void {
   }
   delete (Zotero as ZoteroWithTools).AttachmentTools;
   attachmentPlugin = undefined;
-}
-
-// 仅提供两种内置测试，不接受代码或文件路径；执行前必须由用户确认。
-class AttachmentTestEndpoint {
-  supportedMethods = ['POST'];
-  supportedDataTypes = ['application/json'];
-  permitBookmarklet = false;
-
-  async init({ data }: { data: unknown }): Promise<[number, string, string]> {
-    const mode = (data as { mode?: unknown } | null)?.mode;
-    if (mode !== 'runtime' && mode !== 'integration') return [400, 'text/plain', 'Invalid test mode'];
-    const plugin = attachmentPlugin;
-    if (!plugin || plugin.busy || testsRunning) return [409, 'text/plain', 'Plugin is busy'];
-    const window = Zotero.getMainWindow();
-    const message = mode === 'integration'
-      ? '运行 Attachment Tools 集成测试？将创建临时条目和 PDF、移动文件、调用文件管理器，完成后清理。不会处理现有附件。'
-      : '运行 Attachment Tools 只读环境检查？';
-    if (!window?.confirm(message)) return [403, 'text/plain', 'Cancelled'];
-    testsRunning = true;
-    try {
-      const report = mode === 'runtime' ? runRuntimeTests(plugin) : await runIntegrationTests(plugin);
-      return [200, 'application/json', JSON.stringify(report)];
-    } catch (error) {
-      Zotero.logError(error instanceof Error ? error : new Error(String(error)));
-      return [500, 'application/json', JSON.stringify({ passed: false, error: String(error) })];
-    } finally {
-      testsRunning = false;
-    }
-  }
 }
