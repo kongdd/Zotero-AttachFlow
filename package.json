@@ -8,7 +8,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "build": "tsc && node tools/build.cjs",
-    "test": "tsc && node tools/build.cjs --functions && node --test tests/unit.test.cjs",
+    "test": "tsc && node tools/build.cjs --functions && node --test tests/unit",
     "test:functions": "tsc && node tools/build.cjs --functions && node tools/dev-zotero.cjs test",
     "install:dev": "npm run build && node tools/dev-zotero.cjs install",
     "test:runtime": "node tools/test-zotero.cjs runtime",
