@@ -160,13 +160,6 @@ function fixture(isWin) {
       get: ids => Array.isArray(ids) ? ids.map(id => records.get(id)).filter(Boolean) : records.get(ids),
       getAsync: async ids => Array.isArray(ids)
         ? ids.map(id => records.get(id)).filter(Boolean) : records.get(ids),
-      async moveChildItems(from, to, { includeTrashed = false } = {}) {
-        Zotero.DB.requireTransaction();
-        for (const annotation of from.getAnnotations(includeTrashed)) {
-          annotation.parentItemID = to.id;
-          await annotation.save();
-        }
-      },
     },
     URI: { getItemURI: item => `item:${item.id}` },
     Relations: {

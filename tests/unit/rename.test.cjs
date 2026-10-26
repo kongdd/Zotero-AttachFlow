@@ -254,6 +254,7 @@ check('删除旧附件失败时，回滚批注、笔记、关系及全文索引'
 check('转换保留回收站批注、笔记、入向关系及全文索引', async f => {
   f.pdf.attachmentLinkMode = 0;
   const trashed = f.addAnnotation(f.pdf, { deleted: true });
+  const external = f.addAnnotation(f.pdf, { annotationIsExternal: true });
   const note = f.addAnnotation(f.pdf, { isAnnotation: false });
   f.pdf.notes = [note.id];
   f.other.addRelation('dc:relation', f.Zotero.URI.getItemURI(f.pdf));
@@ -265,6 +266,8 @@ check('转换保留回收站批注、笔记、入向关系及全文索引', asyn
   const [pdf] = f.pdfs();
   assert.equal(trashed.parentItemID, pdf.id);
   assert.equal(trashed.deleted, true);
+  assert.equal(external.parentItemID, f.pdf.id);
+  assert.equal(f.calls.saved.includes(external.id), false);
   assert.equal(note.parentItemID, pdf.id);
   assert.deepEqual(f.other.relations['dc:relation'], [f.Zotero.URI.getItemURI(pdf)]);
   assert.equal(f.indexes.get(pdf.id), 'Indexed text');
@@ -315,21 +318,22 @@ check('修复脚本预览不写库，执行时传入真实条目', async f => {
   assert.equal(f.files.get(f.oldPath), 'PDF');
 });
 
-check('repair 按当前路径重建无法同步的链接附件，跳过其他条目', async f => {
-  const broken = f.addAttachment('Paper.pdf', 'PDF', { title: 'Broken', attachmentSyncedHash: 'abc' });
-  const trashed = f.addAttachment('trashed.pdf', 'PDF', { deleted: true, attachmentSyncedHash: 'abc' });
-  const stored = f.addAttachment('stored.pdf', 'PDF', { attachmentLinkMode: 0, attachmentSyncedHash: 'abc' });
-  const healthy = f.addAttachment('healthy.pdf', 'PDF', { title: 'Healthy' });
-  const result = await f.repair([broken, trashed, stored, healthy]);
-  assert.equal(result.repaired, 1);
-  assert.equal(result.skipped, 3);
+check('repair 按当前路径重建指定链接附件，跳过存储型与回收站条目', async f => {
+  // 漏留同步元数据的坏条目同样需要重建，判定交给调用方清单。
+  const broken = f.addAttachment('Paper.pdf', 'PDF', { title: 'Broken' });
+  const legacy = f.addAttachment('legacy.pdf', 'PDF', { title: 'Legacy', attachmentSyncedHash: 'abc' });
+  const trashed = f.addAttachment('trashed.pdf', 'PDF', { deleted: true });
+  const stored = f.addAttachment('stored.pdf', 'PDF', { attachmentLinkMode: 0 });
+  const result = await f.repair([broken, legacy, trashed, stored]);
+  assert.equal(result.repaired, 2);
+  assert.equal(result.skipped, 2);
   const pdf = f.pdfs().find(item => item.title === 'Broken');
   assert.notEqual(pdf.id, broken.id);
   assert.equal(pdf.attachmentPath, broken.attachmentPath);
   assert.equal(f.records.has(broken.id), false);
+  assert.equal(f.records.has(legacy.id), false);
   assert.equal(f.records.has(trashed.id), true);
   assert.equal(f.records.has(stored.id), true);
-  assert.equal(f.records.has(healthy.id), true);
 });
 
 check('并发整理同父条目的不同 PDF 时不覆盖文件', async f => {

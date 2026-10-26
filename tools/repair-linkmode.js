@@ -1,14 +1,22 @@
 // 在 Zotero「运行 JavaScript」中使用，并勾选异步模式。
-// 需安装新版 AttachFlow；修复此前直接被改 linkMode、导致同步 400 的附件。
-// 判定依据：本地已转为链接文件，却仍保留存储型附件的同步信息（storageModTime/storageHash）。
+// 需安装新版 AttachFlow；修复本地已转为链接文件、服务器仍记为存储型而导致的同步 400。
+// 判定依据：同步缓存中该附件最近一次上传的类型为 imported_file/imported_url。
 const execute = false; // 默认仅预览；确认清单后改为 true。
 
+const syncType = "(SELECT syncObjectTypeID FROM syncObjectTypes WHERE name = 'item')";
 const scope = `
   FROM itemAttachments a
   JOIN items i USING (itemID)
+  JOIN syncCache c
+    ON c.libraryID = i.libraryID AND c.key = i.key AND c.syncObjectTypeID = ${syncType}
+   AND c.version = (
+     SELECT MAX(s.version) FROM syncCache s
+     WHERE s.libraryID = i.libraryID AND s.key = i.key AND s.syncObjectTypeID = ${syncType}
+   )
   WHERE i.libraryID = ?
     AND a.linkMode = ?
-    AND (a.storageModTime IS NOT NULL OR a.storageHash IS NOT NULL)
+    AND COALESCE(json_extract(c.data, '$.data.linkMode'), json_extract(c.data, '$.linkMode'))
+      IN ('imported_file', 'imported_url')
     AND NOT EXISTS (
       SELECT 1 FROM deletedItems d
       WHERE d.itemID = a.itemID

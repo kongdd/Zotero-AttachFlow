@@ -24,7 +24,7 @@ function open_rename(pane: _ZoteroTypes.ZoteroPane): () => void {
       // 存储型附件转换后会换成新条目，打开前换成实际存在的 ID。
       const replacement = new Map(result.replacements.map(({ from, to }) => [from, to]));
       const renewed = (id: number): number => replacement.get(id) ?? id;
-      args = [Array.isArray(original) ? original.map(renewed) : renewed(original), ...args.slice(1)];
+      args[0] = Array.isArray(original) ? original.map(renewed) : renewed(original);
     }
     return originalAttachment.apply(pane, args);
   };

@@ -54,17 +54,19 @@ async function transferToUnique(source: string, target: string, copy: boolean): 
 
 // 同步服务不接受修改已有附件的 linkMode，按 Zotero 自身转换方式重建：新建链接附件，迁移批注和笔记，再删除旧附件。
 async function replaceWithLinkedFile(attachment: Zotero.Item, path: string, title: string): Promise<Zotero.Item> {
-  const json = attachment.toJSON() as AttachmentJSON;
-  json.linkMode = 'linked_file';
-  json.path = path;
-  // 存储型附件的 filename 属于存储目录，链接附件改用 path。
-  delete json.filename;
+  const json = { ...attachment.toJSON(), linkMode: 'linked_file', path, title } as AttachmentJSON;
+  delete json.filename; // 链接附件使用 path，不继承存储目录的 filename。
   const linked = new Zotero.Item('attachment');
   linked.libraryID = attachment.libraryID;
   linked.fromJSON(json);
-  linked.setField('title', title);
-  const notes = Zotero.Items.get(attachment.getNotes(true));
-  const affected = new Set([attachment, ...attachment.getAnnotations(true), ...notes]);
+  // 批注和笔记统一迁移，含回收站条目；外部批注仍随文件保留。
+  const children = [
+    ...attachment.getAnnotations(true).filter(item => !item.annotationIsExternal),
+    ...Zotero.Items.get(attachment.getNotes(true)),
+  ];
+  // toJSON 只含自身关系，另外保留指向旧附件的入向关系。
+  const relations = await Zotero.Relations.getByObject('item', Zotero.URI.getItemURI(attachment));
+  const affected = new Set([attachment, ...children, ...relations.map(({ subject }) => subject)]);
   const parent = attachment.parentItemID && await Zotero.Items.getAsync(attachment.parentItemID);
   if (parent) affected.add(parent);
   const cache = Zotero.Fulltext.getItemCacheFile(attachment).path;
@@ -73,25 +75,19 @@ async function replaceWithLinkedFile(attachment: Zotero.Item, path: string, titl
     // 创建、迁移与删除共用事务；删除失败时不会留下已迁走的批注。
     await Zotero.DB.executeTransaction(async () => {
       await linked.save();
-      await Zotero.Items.moveChildItems(attachment, linked, { includeTrashed: true });
-      // 含回收站中的子笔记，迁移后保持原删除状态。
-      for (const note of notes) {
-        note.parentID = linked.id;
-        await note.save();
+      for (const child of children) {
+        child.parentID = linked.id;
+        await child.save();
       }
-      // toJSON 只含自身关系；这里补迁移其他条目指向旧附件的关系。
-      const uri = Zotero.URI.getItemURI(linked);
-      for (const { subject, predicate } of await Zotero.Relations.getByObject('item', Zotero.URI.getItemURI(attachment))) {
+      for (const { subject, predicate } of relations) {
         if (!subject.isEditable()) continue;
-        affected.add(subject);
-        subject.addRelation(predicate, uri);
+        subject.addRelation(predicate, Zotero.URI.getItemURI(linked));
         await subject.save({ skipDateModifiedUpdate: true });
       }
       await Zotero.Attachments.createDirectoryForItem(linked);
       linkedCache = Zotero.Fulltext.getItemCacheFile(linked).path;
       // 全文索引失败可重建，但调用必须位于事务中。
-      try { await Zotero.Fulltext.transferItemIndex(attachment, linked); }
-      catch (error) { Zotero.logError(error as Error); }
+      await Zotero.Fulltext.transferItemIndex(attachment, linked).catch(error => Zotero.logError(error));
       await attachment.erase();
     });
   } catch (error) {
@@ -185,9 +181,8 @@ async function repair(items: Zotero.Item[]): Promise<RepairResult> {
   for (const attachment of await itemAttachments(items)) {
     try {
       const path = await attachment.getFilePathAsync();
-      // 只重建仍带存储型同步信息的链接附件，避免误伤正常链接附件。
-      const storage = attachment.attachmentSyncedHash || attachment.attachmentSyncedModificationTime;
-      if (attachment.deleted || !path || !storage
+      // 文件已在外部目录，按给定清单重建；存储型与已删除条目原样跳过。
+      if (attachment.deleted || !path
         || attachment.attachmentLinkMode !== Zotero.Attachments.LINK_MODE_LINKED_FILE) {
         result.skipped++;
         continue;
@@ -202,7 +197,7 @@ async function repair(items: Zotero.Item[]): Promise<RepairResult> {
   return result;
 }
 
-const renameTasks = new Map<number, Promise<RenameOutcome | null>>();
+const renameTasks = new Map<number, Promise<RenameOutcome>>();
 
 async function rename(items: Zotero.Item[], { onlyMainPDF = true } = {}): Promise<RenameResult> {
   const result: RenameResult = { renamed: 0, skipped: 0, errors: [], replacements: [] };
