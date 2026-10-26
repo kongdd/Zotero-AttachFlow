@@ -9,9 +9,12 @@ function open_rename(pane: _ZoteroTypes.ZoteroPane): () => void {
   ) {
     for (const item of items) {
       const parent = item.isRegularItem();
-      if (parent) await rename([item]);
+      const result = await rename([item], { onlyMainPDF: parent });
+      const replacement = result.replacements.find(({ from }) => from === item.id);
+      const current = replacement ? await Zotero.Items.getAsync(replacement.to) : item;
+      if (!current) continue;
       // 标记仅随本次打开传递，避免重复处理或影响并发打开。
-      await originalItems.call(pane, [item], event, { ...options, [prepared]: parent });
+      await originalItems.call(pane, [current], event, { ...options, [prepared]: true });
     }
   };
 
@@ -19,7 +22,7 @@ function open_rename(pane: _ZoteroTypes.ZoteroPane): () => void {
     if (!(args[3] as { [prepared]?: boolean })?.[prepared]) {
       const original = args[0];
       const ids = Array.isArray(original) ? original : [original];
-      const attachments = (await Zotero.Items.getAsync(ids)).filter(item => item.isAttachment());
+      const attachments = (await Zotero.Items.getAsync(ids)).filter(item => item && item.isAttachment());
       const result = await rename(attachments, { onlyMainPDF: false });
       // 存储型附件转换后会换成新条目，打开前换成实际存在的 ID。
       const replacement = new Map(result.replacements.map(({ from, to }) => [from, to]));

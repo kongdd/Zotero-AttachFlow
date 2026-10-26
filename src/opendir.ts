@@ -3,7 +3,9 @@ async function itemAttachments(items: Zotero.Item[]): Promise<Zotero.Item[]> {
   for (const item of items) {
     const attachments = item.isAttachment() ? [item]
       : item.isRegularItem() ? await Zotero.Items.getAsync(item.getAttachments()) : [];
-    for (const attachment of attachments) found.set(attachment.id, attachment);
+    for (const attachment of attachments) {
+      if (attachment) found.set(attachment.id, attachment);
+    }
   }
   return [...found.values()];
 }

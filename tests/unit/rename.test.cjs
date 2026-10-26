@@ -133,6 +133,36 @@ check('Word 保留扩展名、保护重名，重复执行不再移动', async f 
   }
 });
 
+check('超长中英文文件名保留扩展名及重名后缀，重复执行不再移动', async f => {
+  for (const [basename, extension] of [['x'.repeat(300), 'pdf'], ['文'.repeat(120), 'DOCX']]) {
+    const attachment = f.addAttachment(`long.${extension}`, 'Document', {
+      attachmentContentType: extension === 'pdf' ? 'application/pdf' : 'application/octet-stream',
+    });
+    f.Zotero.Attachments.getFileBaseNameFromItem = () => basename;
+    const target = f.paths.join(f.paths.dirname(f.target),
+      f.Zotero.File.truncateFileName(`${basename}.${extension}`, 240));
+    f.files.set(target, 'Existing');
+
+    assert.equal((await f.rename([attachment], { onlyMainPDF: false })).renamed, 1);
+    const actual = attachment.attachmentPath;
+    assert.ok(Buffer.byteLength(f.paths.basename(actual)) <= 255);
+    assert.ok(actual.endsWith(`-1.${extension}`));
+    assert.equal(f.files.get(target), 'Existing');
+    assert.equal(f.files.get(actual), 'Document');
+    assert.equal((await f.rename([attachment], { onlyMainPDF: false })).skipped, 1);
+    assert.equal(attachment.attachmentPath, actual);
+  }
+});
+
+check('无扩展名 PDF 补全 .pdf，重复执行不再移动', async f => {
+  f.pdf.attachmentPath = f.paths.join(f.base, 'download');
+  f.files.set(f.pdf.attachmentPath, 'PDF');
+  assert.equal((await f.rename([f.pdf])).renamed, 1);
+  assert.equal(f.pdf.attachmentPath, f.target);
+  assert.equal(f.files.get(f.target), 'PDF');
+  assert.equal((await f.rename([f.pdf])).skipped, 1);
+});
+
 check('并发重命名同一附件只移动一次，不报源文件不存在', async f => {
   const results = await Promise.all([f.rename([f.pdf]), f.rename([f.pdf])]);
   assert.equal(results.reduce((sum, result) => sum + result.renamed, 0), 1);
@@ -164,6 +194,48 @@ check('同附件任务失败回滚后，后续排队任务仍可重试成功', a
   assert.deepEqual(f.calls.saved, [2]);
   assert.equal(f.files.get(f.target), 'PDF');
   assert.equal(f.files.has(f.oldPath), false);
+});
+
+check('批量任务尚未排到的附件被并发转换后，仍返回新 ID', async f => {
+  const extra = f.addAttachment('extra.pdf', 'Extra PDF', { attachmentLinkMode: 0 });
+  const getPath = f.pdf.getFilePathAsync.bind(f.pdf);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.pdf.getFilePathAsync = async () => { await gate; return getPath(); };
+
+  const batch = f.rename([f.pdf, extra], { onlyMainPDF: false });
+  let direct;
+  try {
+    direct = await f.rename([extra], { onlyMainPDF: false });
+  } finally {
+    release();
+  }
+  const result = await batch;
+  assert.equal(direct.renamed, 1);
+  assert.equal(result.renamed, 1);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(f.records.has(extra.id), false);
+  assert.deepEqual(Array.from(result.replacements, row => ({ ...row })),
+    Array.from(direct.replacements, row => ({ ...row })));
+});
+
+check('转换后的新旧附件引用共用队列，元数据变化时只移动一次', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  assert.equal((await f.rename([f.pdf])).renamed, 1);
+  const current = f.pdfs()[0];
+  f.Zotero.Attachments.getFileBaseNameFromItem = () => 'Updated';
+  const results = await Promise.all([
+    f.rename([f.pdf], { onlyMainPDF: false }),
+    f.rename([current], { onlyMainPDF: false }),
+  ]);
+  assert.equal(results.reduce((sum, result) => sum + result.renamed, 0), 1);
+  assert.equal(results.reduce((sum, result) => sum + result.skipped, 0), 1);
+  assert.equal(results.reduce((sum, result) => sum + result.errors.length, 0), 0);
+  assert.deepEqual(Array.from(results[0].replacements, row => ({ ...row })),
+    [{ from: f.pdf.id, to: current.id }]);
+  assert.equal(f.paths.basename(current.attachmentPath), 'Updated.pdf');
+  assert.equal(f.files.get(current.attachmentPath), 'PDF');
 });
 
 check('父子重复选择只处理一次', async f => {
@@ -316,6 +388,23 @@ check('修复脚本预览不写库，执行时传入真实条目', async f => {
   assert.equal(report.result.errors.length, 0);
   assert.equal(f.records.has(f.pdf.id), false);
   assert.equal(f.files.get(f.oldPath), 'PDF');
+});
+
+check('repair 跳过旧附件存储目录及其子目录中的文件', async f => {
+  const dir = f.Zotero.Attachments.getStorageDirectory(f.pdf).path;
+  for (const name of ['old.pdf', f.paths.join('nested', 'old.pdf')]) {
+    const source = f.paths.join(dir, name);
+    f.pdf.attachmentPath = source;
+    f.files.set(source, 'PDF');
+    const result = await f.repair([f.pdf]);
+    assert.equal(result.repaired, 0);
+    assert.equal(result.skipped, 1);
+    assert.equal(result.errors.length, 0);
+    assert.equal(f.files.get(source), 'PDF');
+    assert.equal(f.records.has(f.pdf.id), true);
+  }
+  assert.deepEqual(f.calls.erased, []);
+  assert.deepEqual(f.calls.saved, []);
 });
 
 check('repair 按当前路径重建指定链接附件，跳过存储型与回收站条目', async f => {
