@@ -58,23 +58,31 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
     if (!stored) items.push(attachment);
     return { parent, attachment, oldPath };
   }
+  async function pdfOf(f: Awaited<ReturnType<typeof fixture>>): Promise<Zotero.Item> {
+    const attachments = (await Zotero.Items.getAsync(f.parent.getAttachments()))
+      .filter(item => item.attachmentContentType === 'application/pdf');
+    assert(attachments.length === 1, `Expected one PDF attachment, got ${attachments.length}`);
+    return attachments[0];
+  }
   async function verify(f: Awaited<ReturnType<typeof fixture>>): Promise<string> {
-    const path = await f.attachment.getFilePathAsync();
+    // 存储型附件转换会换成新条目，只按父条目当前附件核对。
+    const attachment = await pdfOf(f);
+    const path = await attachment.getFilePathAsync();
     assert(path && path !== f.oldPath, 'Attachment was not moved');
     assert(collectionDirectory(f.parent) === PathUtils.parent(path), 'Wrong destination directory');
     assert(!(await IOUtils.exists(f.oldPath)), 'Old file still exists');
     assert(await Zotero.File.getContentsAsync(path) === pdf, 'PDF contents changed');
     const row = await Zotero.DB.rowQueryAsync(
-      'SELECT path, linkMode FROM itemAttachments WHERE itemID=?', [f.attachment.id],
+      'SELECT path, linkMode FROM itemAttachments WHERE itemID=?', [attachment.id],
     ) as { path: string; linkMode: number } | false;
     assert(row, 'Attachment row was not saved');
-    assert(row.path === f.attachment.attachmentPath, 'Database path was not saved');
+    assert(row.path === attachment.attachmentPath, 'Database path was not saved');
     assert(row.linkMode === Zotero.Attachments.LINK_MODE_LINKED_FILE, 'Link mode was not saved');
     const title = await Zotero.DB.valueQueryAsync<string>(
       'SELECT value FROM itemData JOIN itemDataValues USING (valueID) WHERE itemID=? AND fieldID=?',
-      [f.attachment.id, Zotero.ItemFields.getID('title')],
+      [attachment.id, Zotero.ItemFields.getID('title')],
     );
-    assert(title === f.attachment.getField('title'), 'Title was not saved');
+    assert(title === attachment.getField('title'), 'Title was not saved');
     return path;
   }
 
@@ -114,10 +122,22 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
       assert((await core.rename(fixtures.map(f => f.parent))).renamed === 2, 'Expected two renames');
       for (const f of fixtures) await verify(f);
     });
-    await check('stored 转 linked file', async () => {
+    await check('stored 转 linked file：重建条目并删除旧附件', async () => {
       const f = await fixture('stored', child.id, true);
       assert((await core.rename([f.attachment])).renamed === 1, 'Stored attachment was not renamed');
       await verify(f);
+      assert(!Zotero.Items.get(f.attachment.id), 'Old attachment still exists');
+    });
+    await check('repair 重建已转链接但保留存储同步信息的附件', async () => {
+      const f = await fixture('repair', child.id);
+      // 模拟旧版插件的结果：本地已是链接附件，但仍带存储型同步信息。
+      f.attachment.attachmentSyncedHash = 'legacy-hash';
+      const report = await core.repair([f.attachment]);
+      assert(report.repaired === 1, `Expected one repair, got ${JSON.stringify(report)}`);
+      const attachment = await pdfOf(f);
+      assert(attachment.id !== f.attachment.id, 'Attachment was not rebuilt');
+      assert(await attachment.getFilePathAsync() === f.oldPath, 'File was moved by repair');
+      assert(!Zotero.Items.get(f.attachment.id), 'Old attachment still exists');
     });
     await check('重名保护及重复执行不变', async () => {
       const f = await fixture('collision', child.id);
@@ -136,6 +156,13 @@ async function runIntegrationTests(core: AttachmentCommands): Promise<TestReport
       if (!plugin.windows?.has(window)) restoreOpen = open_rename(pane);
       await pane.viewAttachment(f.attachment.id);
       await verify(f);
+    });
+    await check('正常打开存储型 PDF：转换后用新条目打开', async () => {
+      const f = await fixture('auto-open-stored', child.id, true);
+      if (!plugin.windows?.has(window)) restoreOpen = open_rename(pane);
+      await pane.viewAttachment(f.attachment.id);
+      await verify(f);
+      assert(!Zotero.Items.get(f.attachment.id), 'Old attachment still exists');
     });
     if (plugin.windows?.has(window)) await check('主窗口快捷键 DOM 事件：Ctrl/Cmd+R、Ctrl/Cmd+E', async () => {
       const f = await fixture('shortcut', child.id);

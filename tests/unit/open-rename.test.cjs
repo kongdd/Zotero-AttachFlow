@@ -11,7 +11,7 @@ check('直接打开 SI PDF 时保留文件和元数据，不影响正常打开',
     await pane.viewItems([si]);
     expected.push({ id: si.id, path: si.attachmentPath }, { id: si.id, path: si.attachmentPath });
     assert.equal(si.title, title);
-    assert.equal(si.attachmentLinkMode, 0);
+    assert.equal(si.attachmentLinkMode, 2);
     assert.equal(f.files.get(si.attachmentPath), 'SI PDF');
   }
   assert.deepEqual(f.calls.saved, []);
@@ -111,6 +111,41 @@ check('同时打开父条目及同一 PDF 时只整理一次，均正常打开',
   assert.deepEqual(f.calls.saved, [2]);
   assert.deepEqual(f.calls.errors, []);
   assert.deepEqual(f.calls.viewed, [{ id: 2, path: f.target }, { id: 2, path: f.target }]);
+  restore();
+});
+
+check('打开存储型 PDF 时转换为链接附件，并用新条目打开', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const pane = f.window.ZoteroPane;
+  const restore = f.open_rename(pane);
+  await pane.viewAttachment(f.pdf.id);
+  const [pdf] = f.pdfs();
+  assert.equal(f.records.has(f.pdf.id), false);
+  assert.equal(pdf.attachmentPath, f.target);
+  assert.deepEqual(f.calls.viewed, [{ id: pdf.id, path: f.target }]);
+  restore();
+});
+
+check('并发打开同一存储型 PDF 时，均使用转换后的新 ID', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const pane = f.window.ZoteroPane;
+  const restore = f.open_rename(pane);
+  await Promise.all([pane.viewAttachment(f.pdf.id), pane.viewAttachment(f.pdf.id)]);
+  const [pdf] = f.pdfs();
+  assert.deepEqual(f.calls.viewed, [{ id: pdf.id, path: f.target }, { id: pdf.id, path: f.target }]);
+  assert.deepEqual(f.calls.errors, []);
+  assert.deepEqual(f.calls.erased, [f.pdf.id]);
+  restore();
+});
+
+check('并发打开父条目和存储型 PDF 时，均使用新附件', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const pane = f.window.ZoteroPane;
+  const restore = f.open_rename(pane);
+  await Promise.all([pane.viewItems([f.parent]), pane.viewAttachment(f.pdf.id)]);
+  const [pdf] = f.pdfs();
+  assert.deepEqual(f.calls.viewed, [{ id: pdf.id, path: f.target }, { id: pdf.id, path: f.target }]);
+  assert.deepEqual(f.calls.errors, []);
   restore();
 });
 

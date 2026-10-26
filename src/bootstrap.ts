@@ -1,6 +1,6 @@
 interface AttachmentPlugin extends AttachmentCommands {
   windows: Map<Window, () => void>;
-  pending: Promise<string | null | RenameResult> | null;
+  pending: Promise<string | null | RenameResult | RepairResult> | null;
 }
 type ZoteroWithTools = typeof Zotero & { AttachmentTools?: AttachmentPlugin };
 let attachmentPlugin: AttachmentPlugin | undefined;
@@ -13,6 +13,7 @@ async function startup({ version }: { version: string }): Promise<void> {
     version,
     opendir,
     rename,
+    repair,
     windows: new Map(),
     pending: null,
   };

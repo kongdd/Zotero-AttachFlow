@@ -13,6 +13,7 @@ check('rename 只移动 PDF 并保存链接，不打开文件', async f => {
   assert.equal(f.pdf.attachmentLinkMode, 2);
   assert.equal(f.files.get(f.target), 'PDF');
   assert.equal(f.files.has(f.oldPath), false);
+  assert.deepEqual(f.calls.erased, []);
   assert.deepEqual(f.calls.saved, [2]);
 });
 
@@ -186,8 +187,149 @@ check('保存失败时恢复原文件和元数据', async f => {
   assert.equal(f.files.get(f.oldPath), 'PDF');
   assert.equal(f.files.has(f.target), false);
   assert.equal(f.pdf.attachmentPath, f.oldPath);
-  assert.equal(f.pdf.attachmentLinkMode, 0);
+  assert.equal(f.pdf.attachmentLinkMode, 2);
   assert.equal(f.pdf.title, 'Original');
+});
+
+check('转换失败时回滚新条目、恢复原文件和元数据', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  f.Zotero.DB.executeTransaction = async () => { throw new Error('Database failure'); };
+  assert.equal((await f.rename([f.pdf])).errors.length, 1);
+  assert.equal(f.files.get(f.oldPath), 'PDF');
+  assert.equal(f.files.has(f.target), false);
+  assert.equal(f.pdf.attachmentPath, f.oldPath);
+  assert.equal(f.pdf.attachmentLinkMode, 0);
+  assert.equal(f.records.has(f.pdf.id), true);
+  assert.equal(f.pdfs().length, 1);
+});
+
+check('存储型附件转换为链接附件：新建条目、迁移批注、删除旧附件', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const annotation = f.addAnnotation(f.pdf, { title: 'Highlight' });
+  assert.equal((await f.rename([f.pdf])).renamed, 1);
+  const [pdf] = f.pdfs();
+  assert.notEqual(pdf.id, f.pdf.id);
+  assert.equal(f.records.has(f.pdf.id), false);
+  assert.equal(pdf.attachmentLinkMode, 2);
+  assert.equal(pdf.attachmentPath, f.target);
+  assert.equal(pdf.title, 'Paper');
+  assert.equal(f.files.get(f.target), 'PDF');
+  assert.equal(f.files.has(f.oldPath), false);
+  assert.equal(annotation.parentItemID, pdf.id);
+  assert.deepEqual(f.calls.erased, [f.pdf.id]);
+  assert.deepEqual(f.calls.saved, [pdf.id, annotation.id]);
+  assert.equal((await f.rename([pdf], { onlyMainPDF: false })).skipped, 1);
+});
+
+check('删除旧附件失败时，回滚批注、笔记、关系及全文索引', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const annotation = f.addAnnotation(f.pdf);
+  const note = f.addAnnotation(f.pdf, { isAnnotation: false });
+  f.pdf.notes = [note.id];
+  const uri = f.Zotero.URI.getItemURI(f.pdf);
+  f.other.addRelation('dc:relation', uri);
+  const cache = f.Zotero.Fulltext.getItemCacheFile(f.pdf).path;
+  f.files.set(cache, 'Fulltext cache');
+  f.indexes.set(f.pdf.id, 'Indexed text');
+  const erase = f.pdf.erase.bind(f.pdf);
+  f.pdf.erase = async () => { await erase(); throw new Error('Delete failed'); };
+
+  const result = await f.rename([f.pdf]);
+  assert.equal(result.errors.length, 1);
+  assert.equal(f.pdfs().length, 1);
+  assert.equal(f.records.has(f.pdf.id), true);
+  assert.equal(f.records.has(annotation.id), true);
+  assert.equal(annotation.parentItemID, f.pdf.id);
+  assert.equal(note.parentItemID, f.pdf.id);
+  assert.deepEqual(f.other.relations['dc:relation'], [uri]);
+  assert.equal(f.indexes.get(f.pdf.id), 'Indexed text');
+  assert.equal(f.files.get(cache), 'Fulltext cache');
+  for (const item of [f.pdf, f.parent, annotation, note, f.other]) {
+    assert.equal(f.calls.reloaded.includes(item.id), true);
+  }
+  assert.equal(f.files.get(f.oldPath), 'PDF');
+  assert.equal(f.files.has(f.target), false);
+});
+
+check('转换保留回收站批注、笔记、入向关系及全文索引', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const trashed = f.addAnnotation(f.pdf, { deleted: true });
+  const note = f.addAnnotation(f.pdf, { isAnnotation: false });
+  f.pdf.notes = [note.id];
+  f.other.addRelation('dc:relation', f.Zotero.URI.getItemURI(f.pdf));
+  const cache = f.Zotero.Fulltext.getItemCacheFile(f.pdf).path;
+  f.files.set(cache, 'Fulltext cache');
+  f.indexes.set(f.pdf.id, 'Indexed text');
+
+  assert.equal((await f.rename([f.pdf])).renamed, 1);
+  const [pdf] = f.pdfs();
+  assert.equal(trashed.parentItemID, pdf.id);
+  assert.equal(trashed.deleted, true);
+  assert.equal(note.parentItemID, pdf.id);
+  assert.deepEqual(f.other.relations['dc:relation'], [f.Zotero.URI.getItemURI(pdf)]);
+  assert.equal(f.indexes.get(pdf.id), 'Indexed text');
+  assert.equal(f.indexes.has(f.pdf.id), false);
+  assert.equal(f.files.get(f.Zotero.Fulltext.getItemCacheFile(pdf).path), 'Fulltext cache');
+  assert.equal(f.files.has(cache), false);
+  assert.deepEqual(f.calls.errors, []);
+});
+
+check('全文索引失败只记录错误，不删除已迁移批注', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const annotation = f.addAnnotation(f.pdf);
+  f.Zotero.Fulltext.transferItemIndex = async () => {
+    f.Zotero.DB.requireTransaction();
+    throw new Error('Index failed');
+  };
+  assert.equal((await f.rename([f.pdf])).renamed, 1);
+  assert.equal(annotation.parentItemID, f.pdfs()[0].id);
+  assert.equal(f.calls.errors.length, 1);
+  assert.match(String(f.calls.errors[0]), /Index failed/);
+});
+
+check('排队转换同一存储型附件时，所有调用均返回新 ID', async f => {
+  f.pdf.attachmentLinkMode = 0;
+  const results = await Promise.all([f.rename([f.pdf]), f.rename([f.pdf]), f.rename([f.pdf])]);
+  const [pdf] = f.pdfs();
+  assert.equal(results.reduce((sum, result) => sum + result.renamed, 0), 1);
+  for (const result of results) {
+    assert.equal(result.errors.length, 0);
+    assert.deepEqual(Array.from(result.replacements, row => ({ ...row })), [{ from: f.pdf.id, to: pdf.id }]);
+  }
+});
+
+check('修复脚本预览不写库，执行时传入真实条目', async f => {
+  f.pdf.attachmentSyncedHash = 'abc';
+  f.Zotero.Libraries = { userLibraryID: 1 };
+  f.Zotero.DB.columnQueryAsync = async () => [f.pdf.id];
+  f.Zotero.AttachmentTools = { repair: f.repair };
+  const script = fs.readFileSync(path.join(__dirname, '../../tools/repair-linkmode.js'), 'utf8');
+  const run = code => vm.runInNewContext(`(async () => {${code}})()`, { ...f.scope });
+  const preview = await run(script);
+  assert.equal(preview.eligible, 1);
+  assert.deepEqual(f.calls.saved, []);
+  const report = await run(script.replace('const execute = false;', 'const execute = true;'));
+  assert.equal(report.result.repaired, 1);
+  assert.equal(report.result.errors.length, 0);
+  assert.equal(f.records.has(f.pdf.id), false);
+  assert.equal(f.files.get(f.oldPath), 'PDF');
+});
+
+check('repair 按当前路径重建无法同步的链接附件，跳过其他条目', async f => {
+  const broken = f.addAttachment('Paper.pdf', 'PDF', { title: 'Broken', attachmentSyncedHash: 'abc' });
+  const trashed = f.addAttachment('trashed.pdf', 'PDF', { deleted: true, attachmentSyncedHash: 'abc' });
+  const stored = f.addAttachment('stored.pdf', 'PDF', { attachmentLinkMode: 0, attachmentSyncedHash: 'abc' });
+  const healthy = f.addAttachment('healthy.pdf', 'PDF', { title: 'Healthy' });
+  const result = await f.repair([broken, trashed, stored, healthy]);
+  assert.equal(result.repaired, 1);
+  assert.equal(result.skipped, 3);
+  const pdf = f.pdfs().find(item => item.title === 'Broken');
+  assert.notEqual(pdf.id, broken.id);
+  assert.equal(pdf.attachmentPath, broken.attachmentPath);
+  assert.equal(f.records.has(broken.id), false);
+  assert.equal(f.records.has(trashed.id), true);
+  assert.equal(f.records.has(stored.id), true);
+  assert.equal(f.records.has(healthy.id), true);
 });
 
 check('并发整理同父条目的不同 PDF 时不覆盖文件', async f => {
@@ -246,7 +388,7 @@ check('共享源文件复制后保存失败，删除副本并恢复元数据', a
   assert.equal(f.files.has(f.target), false);
   assert.equal(await sibling.getFilePathAsync(), f.oldPath);
   assert.equal(f.pdf.attachmentPath, f.oldPath);
-  assert.equal(f.pdf.attachmentLinkMode, 0);
+  assert.equal(f.pdf.attachmentLinkMode, 2);
   assert.equal(f.pdf.title, 'Original');
 });
 

@@ -17,9 +17,14 @@ function open_rename(pane: _ZoteroTypes.ZoteroPane): () => void {
 
   const wrappedAttachment: typeof originalAttachment = async function (...args: [number | number[], ...unknown[]]) {
     if (!(args[3] as { [prepared]?: boolean })?.[prepared]) {
-      const ids = Array.isArray(args[0]) ? args[0] : [args[0]];
+      const original = args[0];
+      const ids = Array.isArray(original) ? original : [original];
       const attachments = (await Zotero.Items.getAsync(ids)).filter(item => item.isAttachment());
-      await rename(attachments, { onlyMainPDF: false });
+      const result = await rename(attachments, { onlyMainPDF: false });
+      // 存储型附件转换后会换成新条目，打开前换成实际存在的 ID。
+      const replacement = new Map(result.replacements.map(({ from, to }) => [from, to]));
+      const renewed = (id: number): number => replacement.get(id) ?? id;
+      args = [Array.isArray(original) ? original.map(renewed) : renewed(original), ...args.slice(1)];
     }
     return originalAttachment.apply(pane, args);
   };

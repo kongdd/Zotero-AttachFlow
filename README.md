@@ -12,9 +12,20 @@
 
 - **批量/快捷键 `rename`**：主 PDF 以 Zotero 默认打开的附件为准（`parent.getBestAttachment()`）；非默认 PDF 不处理，默认 PDF 若明确含 SI、Supplementary、Supporting、MOESM 等标识也跳过。
 - **打开前 `open_rename`**：双击父条目时，遍历子附件并沿用上述批量规则，再由 Zotero 打开默认附件；直接打开单个附件时，只整理该附件，不处理同级附件；SI PDF 保留原名，但 Word（含 SI Word）仍可重命名。
-- 两种方式均支持 Word（`.doc/.docx`），图件不处理。保留扩展名，重名时添加数字后缀，并发处理不覆盖已有文件。处理后的文件会移至分类目录并转为链接附件，不再参与 Zotero 附件同步；若源文件被其他链接附件引用，则复制到目标目录，保留源文件及其他附件不变。
+- 两种方式均支持 Word（`.doc/.docx`），图件不处理。保留扩展名，重名时添加数字后缀，并发处理不覆盖已有文件。处理后的文件会移至分类目录并转为链接附件，不再参与 Zotero 附件同步；若源文件被其他链接附件引用，则复制到目标目录，保留源文件及其他附件不变；存储型附件被其他链接附件引用时不处理。
+- 转为链接附件时遵循 Zotero 自身的转换方式：在同一数据库事务中新建链接附件、迁移批注与笔记、入向关系及全文索引，再删除旧附件。同步服务不接受直接修改既有附件的 `linkMode`，因此不能原地改写；附件 Key 会随新条目变化。
 
 复制格式化参考文献请使用 Zotero 原生快捷键 `Cmd+Shift+C`（Windows：`Ctrl+Shift+C`），样式在「设置 → 导出 → 快速复制」中配置。
+
+## 修复无法同步的附件
+
+旧版本直接改写附件 `linkMode`，Zotero 同步会报 `Cannot change attachment linkMode`（400）并停止上传。升级后新转换不会再触发；已受影响的附件按下述步骤重建：
+
+1. 关闭 Zotero，备份数据目录及外部附件；安装本版本插件并重启。
+2. 在「工具 → 开发者 → 运行 JavaScript」中粘贴 `tools/repair-linkmode.js`，勾选异步模式；`execute = false` 时只预览清单。
+3. 核对清单后改为 `execute = true` 再运行一次。
+
+判定依据是「本地已是链接附件、但仍保留存储型附件的同步信息」，只处理个人库，跳过回收站；重建不移动文件，保留批注、笔记与条目关系；全文索引迁移失败时记录错误，可手动重新索引。
 
 ## 使用
 
@@ -44,7 +55,8 @@ npm run test:integration   # 安装后执行真实文件、数据库测试
 ## 代码
 
 - `src/opendir.ts`：查找 PDF、打开目录。
-- `src/rename.ts`：手动重命名、移动及保存失败回滚。
+- `src/rename.ts`：手动重命名、移动、附件类型转换及失败回滚。
+- `tools/repair-linkmode.js`：修复历史遗留的无法同步附件。
 - `src/open_rename.ts`：接管正常附件打开流程，先调用 rename，再由 Zotero 打开。
 - `src/shortcuts.ts`：按键匹配、输入框排除。
 - `src/bootstrap.ts`：生命周期与快捷键注册，仅用 pending 防止重复执行。
