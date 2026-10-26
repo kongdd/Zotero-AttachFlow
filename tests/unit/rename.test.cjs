@@ -58,15 +58,62 @@ check('SI 识别不误伤包含 si 字母的普通文件名', async f => {
 check('批处理预览排除 SI，保留 Word，且不执行重命名', async f => {
   f.addAttachment('SI1.docx', 'Word', { attachmentContentType: 'application/msword' });
   f.Zotero.Libraries = { userLibraryID: 1 };
-  f.Zotero.DB = { columnQueryAsync: async () => [2, 4] };
+  f.Zotero.DB = {
+    columnQueryAsync: async () => [2, 4],
+    valueQueryAsync: async () => 2,
+  };
   const script = fs.readFileSync(path.join(__dirname, '../../tools/rename-storage.js'), 'utf8');
   for (const [name, title] of siPDFs) {
     f.pdf.attachmentPath = f.paths.join(f.base, name);
     f.pdf.title = title;
     f.files.set(f.pdf.attachmentPath, 'SI PDF');
     const preview = await vm.runInNewContext(`(async () => {${script}})()`, { ...f.scope });
-    assert.deepEqual(Array.from(preview, row => row.attachmentID), [4]);
+    assert.equal(preview.totalCandidates, 2);
+    assert.equal(preview.scanned, 2);
+    assert.equal(preview.eligible, 1);
+    assert.equal(preview.nextAfterID, 4);
+    assert.equal(preview.hasMore, false);
+    assert.deepEqual(Array.from(preview.attachments, row => row.attachmentID), [4]);
   }
+  assert.deepEqual(f.calls.saved, []);
+});
+
+check('批处理游标跨过空批，候选减少后仍不漏项', async f => {
+  f.pdf.title = 'Supporting Information';
+  f.addAttachment('one.docx', 'Word', { attachmentContentType: 'application/msword' });
+  f.addAttachment('two.docx', 'Word', { attachmentContentType: 'application/msword' });
+  let ids = [2, 4, 5];
+  f.Zotero.Libraries = { userLibraryID: 1 };
+  f.Zotero.DB = {
+    valueQueryAsync: async () => ids.length,
+    columnQueryAsync: async (sql, [libraryID, storage, doc, docx, afterID, limit]) => {
+      assert.equal(libraryID, 1);
+      assert.deepEqual([storage, doc, docx], ['storage:%', '%.doc', '%.docx']);
+      assert.match(sql, /ORDER BY a\.itemID/);
+      assert.doesNotMatch(sql, /OFFSET/i);
+      return ids.filter(id => id > afterID).slice(0, limit);
+    },
+  };
+  const script = fs.readFileSync(path.join(__dirname, '../../tools/rename-storage.js'), 'utf8')
+    .replace('const batchSize = 100;', 'const batchSize = 1;');
+  const preview = afterID => vm.runInNewContext(`(async () => {${script.replace(
+    'const afterID = 0;', `const afterID = ${afterID};`,
+  )}})()`, { ...f.scope });
+  const first = await preview(0);
+  assert.equal(first.eligible, 0);
+  assert.equal(first.nextAfterID, 2);
+  assert.equal(first.hasMore, true);
+  const second = await preview(first.nextAfterID);
+  assert.deepEqual(Array.from(second.attachments, row => row.attachmentID), [4]);
+  ids = [2, 5]; // 模拟附件 4 执行后不再是 storage: 附件。
+  const third = await preview(second.nextAfterID);
+  assert.equal(third.totalCandidates, 2);
+  assert.deepEqual(Array.from(third.attachments, row => row.attachmentID), [5]);
+  assert.equal(third.hasMore, false);
+  const empty = await preview(third.nextAfterID);
+  assert.equal(empty.scanned, 0);
+  assert.equal(empty.nextAfterID, 5);
+  assert.equal(empty.hasMore, false);
   assert.deepEqual(f.calls.saved, []);
 });
 
@@ -141,6 +188,78 @@ check('保存失败时恢复原文件和元数据', async f => {
   assert.equal(f.pdf.attachmentPath, f.oldPath);
   assert.equal(f.pdf.attachmentLinkMode, 0);
   assert.equal(f.pdf.title, 'Original');
+});
+
+check('并发整理同父条目的不同 PDF 时不覆盖文件', async f => {
+  const extra = f.addAttachment('extra.pdf', 'Extra PDF');
+  const results = await Promise.all([
+    f.rename([f.pdf], { onlyMainPDF: false }),
+    f.rename([extra], { onlyMainPDF: false }),
+  ]);
+  assert.equal(results.reduce((sum, result) => sum + result.renamed, 0), 2);
+  assert.equal(results.reduce((sum, result) => sum + result.errors.length, 0), 0);
+  assert.notEqual(f.pdf.attachmentPath, extra.attachmentPath);
+  assert.equal(f.files.get(f.pdf.attachmentPath), 'PDF');
+  assert.equal(f.files.get(extra.attachmentPath), 'Extra PDF');
+  assert.equal((await f.rename([extra], { onlyMainPDF: false })).skipped, 1);
+});
+
+check('共享源文件时复制，仅更新当前附件，兼容相对路径及其他父条目', async f => {
+  for (const attachmentPath of [f.oldPath, 'attachments:storage/old.pdf']) {
+    f.pdf.attachmentPath = f.oldPath;
+    f.files.set(f.oldPath, 'PDF');
+    const sibling = f.addAttachment('unused.pdf', 'PDF', {
+      attachmentPath, attachmentLinkMode: 2, parentItemID: 100, title: 'Original',
+    });
+    assert.equal((await f.rename([f.pdf])).renamed, 1);
+    assert.equal(f.files.get(f.pdf.attachmentPath), 'PDF');
+    assert.equal(f.files.get(f.oldPath), 'PDF');
+    assert.equal(await sibling.getFilePathAsync(), f.oldPath);
+    assert.equal(sibling.attachmentPath, attachmentPath);
+    assert.equal(sibling.title, 'Original');
+    assert.equal(f.calls.saved.includes(sibling.id), false);
+    f.records.delete(sibling.id);
+  }
+});
+
+check('并发整理共享源文件的链接附件，均保留独立有效的目标', async f => {
+  f.pdf.attachmentLinkMode = 2;
+  const sibling = f.addAttachment('unused.pdf', 'PDF', { attachmentPath: f.oldPath });
+  const results = await Promise.all([
+    f.rename([f.pdf], { onlyMainPDF: false }),
+    f.rename([sibling], { onlyMainPDF: false }),
+  ]);
+  assert.equal(results.reduce((sum, result) => sum + result.renamed, 0), 2);
+  assert.equal(results.reduce((sum, result) => sum + result.errors.length, 0), 0);
+  assert.notEqual(f.pdf.attachmentPath, sibling.attachmentPath);
+  assert.equal(f.files.get(f.pdf.attachmentPath), 'PDF');
+  assert.equal(f.files.get(sibling.attachmentPath), 'PDF');
+});
+
+check('共享源文件复制后保存失败，删除副本并恢复元数据', async f => {
+  const sibling = f.addAttachment('unused.pdf', 'PDF', {
+    attachmentPath: f.oldPath, attachmentLinkMode: 2,
+  });
+  f.pdf.saveTx = async () => { throw new Error('Database failure'); };
+  assert.equal((await f.rename([f.pdf])).errors.length, 1);
+  assert.equal(f.files.get(f.oldPath), 'PDF');
+  assert.equal(f.files.has(f.target), false);
+  assert.equal(await sibling.getFilePathAsync(), f.oldPath);
+  assert.equal(f.pdf.attachmentPath, f.oldPath);
+  assert.equal(f.pdf.attachmentLinkMode, 0);
+  assert.equal(f.pdf.title, 'Original');
+});
+
+check('非重名错误立即失败，不修改元数据或删除源文件', async f => {
+  let attempts = 0;
+  f.files.set(f.target, 'Existing PDF');
+  f.scope.IOUtils.move = async () => { attempts++; throw new Error('Permission denied'); };
+  assert.equal((await f.rename([f.pdf])).errors.length, 1);
+  assert.equal(attempts, 1);
+  assert.equal(f.files.get(f.oldPath), 'PDF');
+  assert.equal(f.files.get(f.target), 'Existing PDF');
+  assert.equal(f.pdf.attachmentPath, f.oldPath);
+  assert.deepEqual(f.calls.saved, []);
 });
 
 check('独立附件、缺失文件和空选择安全跳过', async f => {

@@ -27,7 +27,11 @@ function fixture(isWin) {
     id: 2, parentItemID: 1, attachmentContentType: 'application/pdf',
     attachmentLinkMode: 0, attachmentPath: oldPath, title: 'Original',
     isAttachment: () => true, isRegularItem: () => false,
-    async getFilePathAsync() { return files.has(this.attachmentPath) ? this.attachmentPath : false; },
+    async getFilePathAsync() {
+      const resolved = this.attachmentPath.startsWith('attachments:')
+        ? paths.join(base, this.attachmentPath.slice('attachments:'.length)) : this.attachmentPath;
+      return files.has(resolved) ? resolved : false;
+    },
     getField() { return this.title; },
     setField(field, value) { this[field] = value; },
     async saveTx() { calls.saved.push(this.id); },
@@ -60,18 +64,31 @@ function fixture(isWin) {
     async viewAttachment(id) { calls.viewed.push({ id, path: await records.get(id).getFilePathAsync() }); },
   };
   window.ZoteroPane = pane;
-  const move = async (from, to, options = {}) => {
+  const transfer = async (from, to, options = {}, move = false) => {
+    await Promise.resolve();
     if (!files.has(from)) throw new Error('Source file does not exist');
-    if (options.noOverwrite && files.has(to)) throw new Error('Target exists');
+    if (options.noOverwrite && files.has(to)) {
+      throw Object.assign(new Error('Target exists'), { name: 'NoModificationAllowedError' });
+    }
     files.set(to, files.get(from));
-    files.delete(from);
+    if (move) files.delete(from);
   };
+  const move = (from, to, options) => transfer(from, to, options, true);
   const Zotero = {
     isWin, isMac: !isWin,
     Prefs: { get: () => base }, getStorageDirectory: () => ({ path: base }),
     Collections: { get: id => id === 20 ? { name: '子分类', parentID: 10 } : { name: '父分类' } },
     Items: { getAsync: async id => Array.isArray(id) ? id.map(id => records.get(id)) : records.get(id) },
-    Attachments: { LINK_MODE_LINKED_FILE: 2, getFileBaseNameFromItem: () => 'Paper' },
+    Attachments: {
+      LINK_MODE_LINKED_FILE: 2, getFileBaseNameFromItem: () => 'Paper',
+      getBaseDirectoryRelativePath: file => 'attachments:' + paths.relative(base, file).replace(/\\/g, '/'),
+    },
+    DB: {
+      valueQueryAsync: async (sql, [id, mode, ...candidates]) => [...records.values()].filter(item =>
+        item.id !== id && item.attachmentLinkMode === mode
+        && candidates.some(candidate => candidate.toLowerCase() === item.attachmentPath?.toLowerCase())
+      ).length,
+    },
     File: {
       getValidFileName: name => name,
       async moveToUnique(from, to) {
@@ -88,7 +105,12 @@ function fixture(isWin) {
     alert: () => {},
   };
   const scope = { Zotero, PathUtils: { join: paths.join, parent: paths.dirname, filename: paths.basename },
-    IOUtils: { makeDirectory: async () => {}, move }, Error };
+    IOUtils: {
+      makeDirectory: async () => {}, move,
+      copy: (from, to, options) => transfer(from, to, options),
+      exists: async file => files.has(file),
+      remove: async file => { files.delete(file); },
+    }, Error };
   const api = vm.runInNewContext(source + '\n({opendir, rename, open_rename, shortcutCommand})', { ...scope });
   return { ...api, scope, paths, base, pdf, parent, other, files, calls,
     oldPath, target, window, Zotero, records, addAttachment };

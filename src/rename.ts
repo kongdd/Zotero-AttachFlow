@@ -18,6 +18,23 @@ function collectionDirectory(parent: Zotero.Item): string {
   return PathUtils.join(base, ...parts);
 }
 
+async function transferToUnique(source: string, target: string, copy: boolean): Promise<string> {
+  const dot = target.lastIndexOf('.');
+  for (let suffix = 0; ; suffix++) {
+    const path = suffix ? `${target.slice(0, dot)}-${suffix}${target.slice(dot)}` : target;
+    try {
+      // 不先检查再移动：由文件系统拒绝覆盖，避免并发请求选中同一目标。
+      if (copy) await IOUtils.copy(source, path, { noOverwrite: true });
+      else await IOUtils.move(source, path, { noOverwrite: true });
+      return path;
+    } catch (error) {
+      if ((error as Error)?.name !== 'NoModificationAllowedError' || !(await IOUtils.exists(path))) {
+        throw error;
+      }
+    }
+  }
+}
+
 async function renameAttachment(attachment: Zotero.Item, onlyMainPDF = true): Promise<boolean> {
   const oldPath = await attachment.getFilePathAsync();
   // 独立附件没有父条目元数据，明确跳过，不猜测文件名。
@@ -40,7 +57,7 @@ async function renameAttachment(attachment: Zotero.Item, onlyMainPDF = true): Pr
     attachmentTitle: parent.getField('title'),
   });
   const target = PathUtils.join(dir, basename + name.slice(name.lastIndexOf('.')));
-  // createUnique 的 -N 后缀也视为已命名，避免重名附件被反复移动。
+  // 唯一文件名的 -N 后缀也视为已命名，避免重名附件被反复移动。
   const escaped = basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const named = new RegExp(`^${escaped}(?:-\\d+)?\\.(?:pdf|docx?)$`, 'i').test(name);
   if (oldPath === target || (PathUtils.parent(oldPath) === dir && named)) return false;
@@ -50,8 +67,16 @@ async function renameAttachment(attachment: Zotero.Item, onlyMainPDF = true): Pr
     path: attachment.attachmentPath,
     title: attachment.getField('title'),
   };
+  // 包括其他父条目及回收站中的引用；兼容绝对路径和附件基目录相对路径。
+  const shared = !!await Zotero.DB.valueQueryAsync<number>(`
+    SELECT COUNT(*) FROM itemAttachments
+    WHERE itemID != ? AND linkMode = ?
+      AND (path = ? COLLATE NOCASE OR path = ? COLLATE NOCASE)
+  `, [attachment.id, Zotero.Attachments.LINK_MODE_LINKED_FILE,
+    oldPath, Zotero.Attachments.getBaseDirectoryRelativePath(oldPath)]);
   await IOUtils.makeDirectory(dir, { createAncestors: true });
-  const movedPath = await Zotero.File.moveToUnique(oldPath, target);
+  // 共享文件只复制，不改变其他附件的路径或内容。
+  const movedPath = await transferToUnique(oldPath, target, shared);
   try {
     attachment.attachmentLinkMode = Zotero.Attachments.LINK_MODE_LINKED_FILE;
     attachment.attachmentPath = movedPath;
@@ -60,7 +85,8 @@ async function renameAttachment(attachment: Zotero.Item, onlyMainPDF = true): Pr
   } catch (error) {
     // 保存失败时恢复原文件和内存元数据；不覆盖后来出现的文件。
     try {
-      await IOUtils.move(movedPath, oldPath, { noOverwrite: true });
+      if (shared) await IOUtils.remove(movedPath);
+      else await IOUtils.move(movedPath, oldPath, { noOverwrite: true });
       attachment.attachmentLinkMode = previous.mode;
       attachment.attachmentPath = previous.path;
       attachment.setField('title', previous.title);

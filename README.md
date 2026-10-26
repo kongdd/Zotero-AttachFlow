@@ -12,7 +12,7 @@
 
 - **批量/快捷键 `rename`**：主 PDF 以 Zotero 默认打开的附件为准（`parent.getBestAttachment()`）；非默认 PDF 不处理，默认 PDF 若明确含 SI、Supplementary、Supporting、MOESM 等标识也跳过。
 - **打开前 `open_rename`**：双击父条目时，遍历子附件并沿用上述批量规则，再由 Zotero 打开默认附件；直接打开单个附件时，只整理该附件，不处理同级附件；SI PDF 保留原名，但 Word（含 SI Word）仍可重命名。
-- 两种方式均支持 Word（`.doc/.docx`），图件不处理。保留扩展名，重名时添加数字后缀。处理后的文件会移至分类目录并转为链接附件，不再参与 Zotero 附件同步。
+- 两种方式均支持 Word（`.doc/.docx`），图件不处理。保留扩展名，重名时添加数字后缀，并发处理不覆盖已有文件。处理后的文件会移至分类目录并转为链接附件，不再参与 Zotero 附件同步；若源文件被其他链接附件引用，则复制到目标目录，保留源文件及其他附件不变。
 
 复制格式化参考文献请使用 Zotero 原生快捷键 `Cmd+Shift+C`（Windows：`Ctrl+Shift+C`），样式在「设置 → 导出 → 快速复制」中配置。
 
